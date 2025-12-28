@@ -1,0 +1,306 @@
+/**
+ * Web Scraper Service
+ * Scrapes articles from BeyondChats blog using Puppeteer
+ */
+
+const puppeteer = require('puppeteer');
+const cheerio = require('cheerio');
+
+/**
+ * Scrape articles from BeyondChats blog
+ * @param {number} count - Number of articles to scrape (default: 5)
+ * @returns {Promise<Array>} Array of article objects
+ */
+const scrapeBeyondChatsArticles = async (count = 5) => {
+  let browser;
+  
+  try {
+    console.log('🌐 Launching browser...');
+    
+    // Launch Puppeteer with optimized settings
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ]
+    });
+
+    const page = await browser.newPage();
+    
+    // Set user agent to avoid bot detection
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    console.log('📄 Navigating to BeyondChats blog...');
+    
+    // Navigate to the blog page
+    await page.goto('https://beyondchats.com/blogs/', {
+      waitUntil: 'networkidle2',
+      timeout: 30000
+    });
+
+    console.log('🔍 Finding articles...');
+
+    // Get the page HTML
+    const html = await page.content();
+    const $ = cheerio.load(html);
+
+    const articles = [];
+    const articleElements = [];
+
+    // Try multiple selectors to find article cards
+    // Adjust these selectors based on actual website structure
+    const possibleSelectors = [
+      'article',
+      '.blog-post',
+      '.post',
+      '.article-card',
+      '[class*="article"]',
+      '[class*="post"]',
+      'a[href*="/blogs/"]'
+    ];
+
+    let foundArticles = false;
+    
+    for (const selector of possibleSelectors) {
+      const elements = $(selector);
+      if (elements.length > 0) {
+        console.log(`✅ Found ${elements.length} articles using selector: ${selector}`);
+        elements.each((i, el) => articleElements.push($(el)));
+        foundArticles = true;
+        break;
+      }
+    }
+
+    if (!foundArticles) {
+      console.log('⚠️  Using fallback: extracting all links');
+      $('a').each((i, el) => {
+        const href = $(el).attr('href');
+        if (href && href.includes('/blogs/') && href !== '/blogs/') {
+          articleElements.push($(el));
+        }
+      });
+    }
+
+    // Get the last N articles (oldest ones from the last page)
+    const targetArticles = articleElements.slice(-count);
+
+    console.log(`📝 Processing ${targetArticles.length} articles...`);
+
+    // Process each article
+    for (let i = 0; i < targetArticles.length; i++) {
+      const element = targetArticles[i];
+      
+      try {
+        // Extract article URL
+        let articleUrl = element.attr('href') || element.find('a').first().attr('href');
+        
+        if (!articleUrl) continue;
+        
+        // Make URL absolute if relative
+        if (articleUrl.startsWith('/')) {
+          articleUrl = `https://beyondchats.com${articleUrl}`;
+        }
+
+        console.log(`  ${i + 1}. Scraping: ${articleUrl}`);
+
+        // Visit article page
+        await page.goto(articleUrl, {
+          waitUntil: 'networkidle2',
+          timeout: 30000
+        });
+
+        // Wait a bit to ensure content loads
+        await page.waitForTimeout(2000);
+
+        // Extract article content
+        const articleData = await page.evaluate(() => {
+          // Helper function to extract text content
+          const getText = (selector) => {
+            const el = document.querySelector(selector);
+            return el ? el.textContent.trim() : '';
+          };
+
+          const getHTML = (selector) => {
+            const el = document.querySelector(selector);
+            return el ? el.innerHTML.trim() : '';
+          };
+
+          // Try multiple possible selectors for title
+          const title = getText('h1') || 
+                       getText('.article-title') || 
+                       getText('[class*="title"]') ||
+                       document.title.split('|')[0].trim();
+
+          // Try to find main content
+          const content = getHTML('article') || 
+                         getHTML('.article-content') || 
+                         getHTML('.post-content') || 
+                         getHTML('main') ||
+                         getHTML('.content') ||
+                         document.body.innerHTML;
+
+          // Try to find author
+          const author = getText('.author') || 
+                        getText('[class*="author"]') || 
+                        getText('[rel="author"]') ||
+                        'BeyondChats';
+
+          // Try to find date
+          const dateText = getText('time') || 
+                          getText('.date') || 
+                          getText('[class*="date"]') ||
+                          new Date().toISOString();
+
+          return {
+            title,
+            content,
+            author,
+            dateText
+          };
+        });
+
+        // Parse date
+        let articleDate;
+        try {
+          articleDate = new Date(articleData.dateText);
+          if (isNaN(articleDate)) {
+            articleDate = new Date();
+          }
+        } catch {
+          articleDate = new Date();
+        }
+
+        // Clean content (remove scripts, styles, etc.)
+        const cleanContent = cleanHTML(articleData.content);
+
+        articles.push({
+          title: articleData.title || 'Untitled Article',
+          content: cleanContent,
+          author: articleData.author || 'BeyondChats',
+          date: articleDate,
+          url: articleUrl,
+          metadata: {
+            scrapedAt: new Date(),
+            wordCount: cleanContent.split(/\s+/).length
+          }
+        });
+
+        console.log(`  ✅ Successfully scraped: ${articleData.title}`);
+
+        // Delay to avoid overwhelming the server
+        await page.waitForTimeout(parseInt(process.env.SCRAPING_DELAY_MS) || 2000);
+
+      } catch (error) {
+        console.error(`  ❌ Error scraping article ${i + 1}:`, error.message);
+        continue;
+      }
+    }
+
+    console.log(`\n✅ Successfully scraped ${articles.length} articles\n`);
+    return articles;
+
+  } catch (error) {
+    console.error('❌ Scraping error:', error.message);
+    throw error;
+  } finally {
+    if (browser) {
+      await browser.close();
+      console.log('🔒 Browser closed');
+    }
+  }
+};
+
+/**
+ * Clean HTML content
+ * @param {string} html - Raw HTML content
+ * @returns {string} Cleaned HTML
+ */
+const cleanHTML = (html) => {
+  const $ = cheerio.load(html);
+  
+  // Remove unwanted elements
+  $('script').remove();
+  $('style').remove();
+  $('iframe').remove();
+  $('noscript').remove();
+  $('.advertisement').remove();
+  $('.ad').remove();
+  $('[class*="cookie"]').remove();
+  $('[class*="popup"]').remove();
+  
+  // Get cleaned HTML
+  return $.html();
+};
+
+/**
+ * Scrape a single article from a URL
+ * @param {string} url - Article URL
+ * @returns {Promise<Object>} Article data
+ */
+const scrapeArticle = async (url) => {
+  let browser;
+  
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.waitForTimeout(1500);
+
+    const articleData = await page.evaluate(() => {
+      const getText = (selector) => {
+        const el = document.querySelector(selector);
+        return el ? el.textContent.trim() : '';
+      };
+
+      const getHTML = (selector) => {
+        const el = document.querySelector(selector);
+        return el ? el.innerHTML.trim() : '';
+      };
+
+      const title = getText('h1') || 
+                   getText('.article-title') || 
+                   document.title;
+
+      const content = getHTML('article') || 
+                     getHTML('.article-content') || 
+                     getHTML('.post-content') || 
+                     getHTML('main') ||
+                     document.body.innerHTML;
+
+      return { title, content };
+    });
+
+    return {
+      url,
+      title: articleData.title,
+      content: cleanHTML(articleData.content)
+    };
+
+  } catch (error) {
+    console.error(`Error scraping ${url}:`, error.message);
+    throw error;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+};
+
+module.exports = {
+  scrapeBeyondChatsArticles,
+  scrapeArticle,
+  cleanHTML
+};
