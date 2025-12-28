@@ -23,12 +23,15 @@ An AI-powered article improvement pipeline that scrapes blog articles, analyzes 
 - ✅ Input validation and error handling
 - ✅ Structured response formatting
 
-### Phase 2 - AI Enhancement (In Progress)
-- 🔄 Google search integration for top-ranking articles
-- 🔄 Content extraction from competitor articles
-- 🔄 AI-powered article rewriting using free LLM APIs
-- 🔄 Citation management and reference tracking
-- 🔄 Rate limiting and progress logging
+### Phase 2 - AI Enhancement
+- ✅ Google search integration (free, no API key)
+- ✅ DuckDuckGo fallback search
+- ✅ Content extraction from top-ranking articles
+- ✅ AI-powered article rewriting (Groq API - free)
+- ✅ Hugging Face fallback (100% free)
+- ✅ Citation management and reference tracking
+- ✅ Rate limiting and progress logging
+- ✅ Enhancement script with detailed logging
 
 ### Phase 3 - React Frontend (Upcoming)
 - ⏳ Responsive article display interface
@@ -193,10 +196,35 @@ Server runs on `http://localhost:5000`
 npm run scrape
 ```
 
-#### 4. Enhance Articles (Phase 2)
+### Step 4: Get Free AI API Key
+
+**Get Groq API key** (recommended - fastest):
+1. Visit [Groq Console](https://console.groq.com/)
+2. Sign up (free, no credit card)
+3. CreatView Enhanced Articles
+```bash
+# Check enhancement results
+npm run check
+
+# View in API
+# Visit: http://localhost:5000/api/articles?isUpdated=true
+```
+
+#### 6. Start Frontend (Phase 3 - Coming Soon
+4. Add to `.env`: `GROQ_API_KEY=your_key_here`
+
+See detailed guide: [GROQ_API_SETUP.md](GROQ_API_SETUP.md)
+
+### Step 5: Enhance Articles (Phase 2)
 ```bash
 npm run enhance
 ```
+
+This will:
+- Search Google for top articles
+- Scrape reference content
+- Use AI to enhance articles
+- Save with references
 
 #### 5. Start Frontend (Phase 3)
 ```bash

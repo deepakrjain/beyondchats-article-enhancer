@@ -114,8 +114,20 @@ const scrapeBeyondChatsArticles = async (count = 5) => {
           timeout: 30000
         });
 
-        // Wait a bit to ensure content loads
-        await page.waitForTimeout(2000);
+        // Wait for content to load - try multiple strategies
+        try {
+          await page.waitForSelector('article, .entry-content, .post-content', { timeout: 5000 });
+        } catch {
+          // Content selector not found, continue anyway
+        }
+
+        // Scroll to load lazy content
+        await page.evaluate(() => {
+          window.scrollTo(0, document.body.scrollHeight);
+        });
+        
+        // Wait for any lazy-loaded content
+        await page.waitForTimeout(3000);
 
         // Extract article content
         const articleData = await page.evaluate(() => {
@@ -130,30 +142,79 @@ const scrapeBeyondChatsArticles = async (count = 5) => {
             return el ? el.innerHTML.trim() : '';
           };
 
-          // Try multiple possible selectors for title
+          // Extract title
           const title = getText('h1') || 
                        getText('.article-title') || 
                        getText('[class*="title"]') ||
                        document.title.split('|')[0].trim();
 
-          // Try to find main content
-          const content = getHTML('article') || 
-                         getHTML('.article-content') || 
-                         getHTML('.post-content') || 
-                         getHTML('main') ||
-                         getHTML('.content') ||
-                         document.body.innerHTML;
+          // Try multiple strategies to get full content
+          let content = '';
+          
+          // Strategy 1: Look for common blog content containers
+          const contentSelectors = [
+            '.entry-content',
+            '.post-content', 
+            '.article-content',
+            '.blog-content',
+            '[class*="post-body"]',
+            '[class*="entry-body"]',
+            'article .content',
+            'article > div',
+            '.elementor-widget-container',
+            '[data-elementor-type="wp-post"]',
+            '.elementor-element',
+            '.content-area',
+            'main article'
+          ];
 
-          // Try to find author
+          for (const selector of contentSelectors) {
+            const el = document.querySelector(selector);
+            if (el && el.innerHTML.length > 200) {
+              content = el.innerHTML;
+              console.log(`Found content with: ${selector}, length: ${el.innerHTML.length}`);
+              break;
+            }
+          }
+
+          // Strategy 2: If no content found, get all text-rich elements from article
+          if (!content || content.length < 200) {
+            const article = document.querySelector('article') || document.querySelector('main') || document.querySelector('.post');
+            if (article) {
+              const elements = article.querySelectorAll('p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre');
+              if (elements.length > 0) {
+                content = Array.from(elements)
+                  .map(p => p.outerHTML)
+                  .join('\n');
+                console.log(`Found ${elements.length} content elements`);
+              }
+            }
+          }
+
+          // Strategy 3: Get everything from body, then clean
+          if (!content || content.length < 200) {
+            const main = document.querySelector('main') || document.querySelector('article') || document.querySelector('.site-content');
+            if (main) {
+              content = main.innerHTML;
+              console.log('Using main/article container');
+            } else {
+              content = document.body.innerHTML;
+              console.log('Fallback to body');
+            }
+          }
+
+          // Extract author
           const author = getText('.author') || 
                         getText('[class*="author"]') || 
                         getText('[rel="author"]') ||
+                        getText('.post-author') ||
                         'BeyondChats';
 
-          // Try to find date
+          // Extract date
           const dateText = getText('time') || 
                           getText('.date') || 
                           getText('[class*="date"]') ||
+                          getText('.published') ||
                           new Date().toISOString();
 
           return {
@@ -274,11 +335,37 @@ const scrapeArticle = async (url) => {
                    getText('.article-title') || 
                    document.title;
 
-      const content = getHTML('article') || 
-                     getHTML('.article-content') || 
-                     getHTML('.post-content') || 
-                     getHTML('main') ||
-                     document.body.innerHTML;
+      // Try multiple content strategies
+      let content = '';
+      const contentSelectors = [
+        '.entry-content',
+        '.post-content', 
+        '.article-content',
+        '[class*="post-body"]',
+        '.elementor-widget-container'
+      ];
+
+      for (const selector of contentSelectors) {
+        const el = document.querySelector(selector);
+        if (el && el.innerHTML.length > 200) {
+          content = el.innerHTML;
+          break;
+        }
+      }
+
+      if (!content || content.length < 200) {
+        const article = document.querySelector('article') || document.querySelector('main');
+        if (article) {
+          const paragraphs = article.querySelectorAll('p, h2, h3, h4, ul, ol');
+          if (paragraphs.length > 0) {
+            content = Array.from(paragraphs).map(p => p.outerHTML).join('\n');
+          }
+        }
+      }
+
+      if (!content) {
+        content = getHTML('article') || getHTML('main') || document.body.innerHTML;
+      }
 
       return { title, content };
     });
